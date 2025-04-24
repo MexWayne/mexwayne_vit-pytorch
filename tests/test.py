@@ -1,17 +1,12 @@
 import torch
 from vit_pytorch import ViT
-import cv2
-import numpy as np
-import random
+from PIL import Image
 from transformers import ViTForImageClassification, ViTImageProcessor
 
 # google/vit-base-patch16-224 from hugging face
 def load_pretrain_model(vit, hf_model_name='google/vit-base-patch16-384'):
 
     from vit_pytorch import ViT
-    import cv2
-    import numpy as np
-    import os
     from collections import OrderedDict
     from transformers import ViTModel
 
@@ -40,8 +35,8 @@ def load_pretrain_model(vit, hf_model_name='google/vit-base-patch16-384'):
     # patch embedding
     w_patch = hf_state_dict['embeddings.patch_embeddings.projection.weight']  # [768, 3, 16, 16]
     b_patch = hf_state_dict['embeddings.patch_embeddings.projection.bias']    # [768]
-    new_state_dict['to_patch_embedding.2.weight'] = w_patch.flatten(1).T      # [768, 768]
-    new_state_dict['to_patch_embedding.2.bias'] = b_patch
+    new_state_dict['to_patch_embedding.0.weight'] = w_patch    # [768, 3, 16, 16]
+    new_state_dict['to_patch_embedding.0.bias'] = b_patch
     
     # transformer blocks
     for i in range(12):  # ViT-base has 12 layers
@@ -72,6 +67,10 @@ def load_pretrain_model(vit, hf_model_name='google/vit-base-patch16-384'):
     # final norm
     new_state_dict['transformer.norm.weight'] = hf_state_dict['layernorm.weight']
     new_state_dict['transformer.norm.bias']   = hf_state_dict['layernorm.bias']
+
+    hf_full_model = ViTForImageClassification.from_pretrained(hf_model_name)
+    new_state_dict['mlp_head.weight'] = hf_full_model.state_dict()['classifier.weight']
+    new_state_dict['mlp_head.bias']   = hf_full_model.state_dict()['classifier.bias']
     
     custom_state_dict.update(new_state_dict)
     # if the strict = false the classify results will be random results
@@ -80,17 +79,11 @@ def load_pretrain_model(vit, hf_model_name='google/vit-base-patch16-384'):
 
 
 def test():
-    img = cv2.imread("../datasets/000000000110.jpg")
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = cv2.resize(img, (384, 384))
+    img = Image.open("datasets/000000000110.jpg").convert("RGB")
 
-
-    processor = ViTImageProcessor.from_pretrained('google/vit-base-patch16-384')
-    inputs = processor(images=img, return_tensors="pt")
 
 
     # (384 / 16) * (384 / 16) = 24 * 24 = 576
-
     # patch_height = 16 = patch_width 
     # 3 * 16 * 16 = 768 = patch_dim = channels * patch_height * patch_width
     v = ViT(
@@ -113,13 +106,17 @@ def test():
         # init from a given GPT-2 model
         load_pretrain_model(v)
 
-    img = img.astype(np.float32) / 255.0
-    torch_tensor = torch.from_numpy(img).permute(2, 0, 1)  # shape: [3, H, W]
-    img = torch_tensor.unsqueeze(0)
+    processor = ViTImageProcessor.from_pretrained("google/vit-base-patch16-384")
+    inputs = processor(images=img, return_tensors="pt", do_rescale=False)
+    img_tensor = inputs["pixel_values"]
+    
+    print("input dtype:", img_tensor.dtype)
+    print("model dtype:", next(v.parameters()).dtype)
 
-    with torch.no_grad():
+    # 禁用随机
+    with torch.no_grad(): #with this code, the results will run as random
         v.eval() #with this code, the results will run as random
-        preds = v(img)
+        preds = v(img_tensor)
         assert preds.shape == (1, 1000), 'correct logits outputted'
 
     return preds
@@ -147,40 +144,3 @@ if __name__ == "__main__":
     
     print("Class name:", labels[predicted_class.item()])
     print("\n>>> finished!")
-
-
-
-
-
-def test_new():
-
-    import torch
-    from transformers import ViTForImageClassification, ViTImageProcessor
-    from PIL import Image
-
-    model = ViTForImageClassification.from_pretrained('google/vit-base-patch16-224')
-    processor = ViTImageProcessor.from_pretrained('google/vit-base-patch16-224')
-
-    img = Image.open("../datasets/000000000110.jpg").convert("RGB")
-    inputs = processor(images=img, return_tensors="pt")
-
-    model.eval()
-    with torch.no_grad():
-        outputs = model(**inputs)
-        logits = outputs.logits           # shape: [1, 1000]
-        pred_class = logits.argmax(dim=-1)  # tensor([idx])
-    return pred_class
-
-
-if __name__ == "__main__":
-    import urllib
-    pred_class = test_new()
-
-    url = "https://raw.githubusercontent.com/pytorch/hub/master/imagenet_classes.txt"
-    urllib.request.urlretrieve(url, "imagenet_classes.txt")
-
-    with open("imagenet_classes.txt") as f:
-        labels = [line.strip() for line in f.readlines()]
-
-    print("Predicted class index:", pred_class.item())
-    print("Class name:", labels[pred_class.item()])

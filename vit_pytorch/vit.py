@@ -15,7 +15,7 @@ class FeedForward(nn.Module):
     def __init__(self, dim, hidden_dim, dropout = 0.):
         super().__init__()
         self.net = nn.Sequential(
-            nn.LayerNorm(dim),
+            nn.LayerNorm(dim, eps=1e-12),
             nn.Linear(dim, hidden_dim),
             nn.GELU(),
             nn.Dropout(dropout),
@@ -35,7 +35,7 @@ class Attention(nn.Module):
         self.heads = heads
         self.scale = dim_head ** -0.5
 
-        self.norm = nn.LayerNorm(dim)
+        self.norm = nn.LayerNorm(dim, eps=1e-12)
 
         self.attend = nn.Softmax(dim = -1)
         self.dropout = nn.Dropout(dropout)
@@ -65,7 +65,7 @@ class Attention(nn.Module):
 class Transformer(nn.Module):
     def __init__(self, dim, depth, heads, dim_head, mlp_dim, dropout = 0.):
         super().__init__()
-        self.norm = nn.LayerNorm(dim)
+        self.norm = nn.LayerNorm(dim, eps=1e-12)
         self.layers = nn.ModuleList([])
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
@@ -92,11 +92,16 @@ class ViT(nn.Module):
         patch_dim = channels * patch_height * patch_width
         assert pool in {'cls', 'mean'}, 'pool type must be either cls (cls token) or mean (mean pooling)'
 
+        #self.to_patch_embedding = nn.Sequential(
+        #    Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1 = patch_height, p2 = patch_width),
+        #    nn.LayerNorm(patch_dim, eps=1e-12),
+        #    nn.Linear(patch_dim, dim),
+        #    nn.LayerNorm(dim, eps=1e-12),
+        #)
         self.to_patch_embedding = nn.Sequential(
-            Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1 = patch_height, p2 = patch_width),
-            nn.LayerNorm(patch_dim),
-            nn.Linear(patch_dim, dim),
-            nn.LayerNorm(dim),
+            nn.Conv2d(in_channels=3, out_channels=dim, kernel_size=patch_size, stride=patch_size),
+            Rearrange('b d h w -> b (h w) d'),
+            nn.LayerNorm(dim, eps=1e-12)
         )
 
         self.pos_embedding = nn.Parameter(torch.randn(1, num_patches + 1, dim))
